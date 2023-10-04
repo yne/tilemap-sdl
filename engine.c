@@ -249,3 +249,12 @@ int main(int argc, char** argv)
     }
     fini();
 }
+/*
+TILES flags:
+- hoverlay
+- slash stairs: y++ when x++; z++ when enter from Down or Left
+- backslash stairs: y-- when x++; z++ when enter from Down or Left
+- crossover:flag if from L or R, can walk any crossover, can ony exit from L/R if flag
+- snow: walk using velocity
+- water: walk using velocity
+*/

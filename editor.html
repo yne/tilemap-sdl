@@ -26,35 +26,66 @@
     </form>
     <form name="action" onsubmit="return false">
         <button name="trim" type="button">trim...</button>
-        <input name=walkable type="number" min="0">
+        <input name=walkable title=walkable type="number" min="0" size="2">
+        <input name=colision title=colision type="number" min="0" size="2">
+        <input name=swimming title=swimming type="number" min="0" size="2">
+        <input name=slippery title=slippery type="number" min="0" size="2">
+        <input name=bridge_h title=bridge_h type="number" min="0" size="2">
+        <input name=bridge_v title=bridge_v type="number" min="0" size="2">
+        <input name=stair_ru title=stair_ru type="number" min="0" size="2">
+        <input name=stair_rd title=stair_rd type="number" min="0" size="2">
     </form>
     <div id="tiles"></div>
 </aside>
-<canvas id="tilemap"></canvas>
+<main>
+    <canvas id="layer0"></canvas>
+    <canvas id="layer1"></canvas>
+</main>
 
 <script type="module">
-    let /**@type{ImageData[]}*/ tileset = [];
-    let /**@type{ImageData[]}*/ tilemap = []; // don't use tileset index for working
+    let /**@type{ImageData[]} hold all tiles image data*/ tileset = [];
+    let /**@type{ImageData[]} point to `tileset` images*/ tilemap = []; // don't use tileset index yet (harder to work with for edition)
     let project = {
-        /**@type{number}*/ tilesize:0,
-        /**@type{number}*/ stride:0,
-        /**@type{number}*/ walkable:0,
+        /**@type{number} tile size in px */ tilesize: 0,
+        /**@type{number} nbtile per rows */ stride: 0,
+        tileIndexes: {
+            /**@type{number}*/ walkable: 0, // shall always be 0
+            /**@type{number}*/ colision: 0,
+            /**@type{number}*/ swimming: 0,
+            /**@type{number}*/ slippery: 0,
+            /**@type{number}*/ bridge_h: 0,
+            /**@type{number}*/ bridge_v: 0,
+            /**@type{number}*/ stair_ru: 0, // Right is Upstair
+            /**@type{number}*/ stair_rd: 0, // Right is Downstair
+        }
     };
-    const {load, proj, save, action} = document.forms;
-    load.onsubmit = ({target}) => !fromImageFile(target.image.files[0], +target.size.value);
-    proj.onsubmit = ({target}) => !fromProject(...['.json','.bin','.png'].map(ext=>target.image.files.find(e=>e.name.endsWith(ext))));
-    save.onsubmit = ({target}) => !toHref(...['tileset','tilemap','project'].map(n=>save[n].children[0]));
-
-    const read = (f, type='Text') => new Promise((resolve) => Object.assign(new FileReader(), {onload:(ev)=>resolve(ev.target.result)})['readAs'+type](f))
+    const { load, proj, save, action } = document.forms;
+    load.onsubmit = ({ target }) => !fromImageFile(target.image.files[0], +target.size.value);
+    proj.onsubmit = ({ target }) => !fromProject(...['.json', '.bin', '.png'].map(ext => target.image.files.find(e => e.name.endsWith(ext))));
+    save.onsubmit = ({ target }) => !toHref(...['tileset', 'tilemap', 'project'].map(n => save[n].children[0]));
+    const read = (f, type = 'Text') => new Promise((resolve) => Object.assign(new FileReader(), { onload: (ev) => resolve(ev.target.result) })['readAs' + type](f))
+    async function toLocalStorage() {
+        localStorage.tileset = JSON.stringify(tileset.map(t => [t.width, ...t.data]));
+        localStorage.tilemapIdx = JSON.stringify(tilemap.map(e => tileset.indexOf(e)));
+        localStorage.project = JSON.stringify(project);
+    }
+    async function fromLocalStorage() {
+        tileset = JSON.parse(localStorage.tileset).map(([x, ...data]) => new ImageData(new Uint8ClampedArray(data), x));
+        tilemap = JSON.parse(localStorage.tilemapIdx).map(idx => tileset[idx]);
+        project = JSON.parse(localStorage.project);
+        renderTileset();
+        renderTilemap();
+        renderRules();
+    }
     async function fromImageFile(f, tilesize) {
         const src = await read(f, 'DataURL');
-        const img = await new Promise((resolve) => Object.assign(new Image(), {onload:(ev)=>resolve(ev.target),src}));
+        const img = await new Promise((resolve) => Object.assign(new Image(), { onload: (ev) => resolve(ev.target), src }));
         if (img.width % tilesize || img.height % tilesize) throw "map size is not a multiple of tilesize";
         project.tilesize = tilesize;
         project.stride = img.width / tilesize;
         // create local canvas that will be split into unique tiles
-        const canvas = Object.assign(document.createElement('canvas'),{width:img.width, height:img.height});
-        const canvas2d = canvas.getContext('2d', {willReadFrequently:true});
+        const canvas = Object.assign(document.createElement('canvas'), { width: img.width, height: img.height });
+        const canvas2d = canvas.getContext('2d', { willReadFrequently: true });
         canvas2d.drawImage(img, 0, 0);
         const tiles = new Map();
         tilemap = new Array();
@@ -72,22 +103,27 @@
         renderTileset();
         renderTilemap();
         renderRules();
+        toLocalStorage();
     }
     async function fromProject(project_json, tilemap_bin, tileset_bmp) {
         project = JSON.parse(await read(project_json, 'Text'));
-        const UintXArray = window[`Uint${project.mapType||8}Array`];
+        const UintXArray = window[`Uint${project.mapType || 8}Array`];
         tilemap = Array.prototype.slice.call(new UintXArray(await read(tilemap_bin, 'ArrayBuffer')));
         tileset = await read(tileset_bmp, 'ArrayBuffer');
+        renderTileset();
+        renderTilemap();
+        renderRules();
+        toLocalStorage();
     }
-    async function toHref (tileset_a, tilemap_a, project_a) {
+    async function toHref(tileset_a, tilemap_a, project_a) {
         //titles
-        const canvas = Object.assign(document.createElement('canvas'), {width:project.tilesize,height:project.tilesize*tileset.length});
+        const canvas = Object.assign(document.createElement('canvas'), { width: project.tilesize, height: project.tilesize * tileset.length });
         const ctx = canvas.getContext('2d');
         tileset.forEach((tile, i) => ctx.putImageData(tile, 0, i * project.tilesize))
         tileset_a.href = canvas.toDataURL();
         //map
         const sizeof = 1 << Math.max(3, Math.ceil(Math.log2(Math.log2(tileset.length))));
-        const tilemapIdx = tilemap.map(e=>tileset.indexOf(e));
+        const tilemapIdx = tilemap.map(e => tileset.indexOf(e));
         tilemap_a.href = window.URL.createObjectURL(new Blob([new window[`Uint${sizeof}Array`](tilemapIdx)]))
         tilemap_a.title = `uint${sizeof}[${tilemap.length}]`;
         //info
@@ -96,44 +132,110 @@
 
     function renderTileset() {
         const tileElem = document.getElementById("tiles");
-        const draw = (cnv,img) => (cnv.getContext('2d').putImageData(img, 0, 0),cnv);
-        tileElem.replaceChildren(...tileset.map(img => draw(Object.assign(document.createElement("canvas"), {width:img.width, height:img.height, tabIndex:0}), img)));
+        const draw = (cnv, img) => (cnv.getContext('2d').putImageData(img, 0, 0), cnv);
+        tileElem.replaceChildren(...tileset.map(img => draw(Object.assign(document.createElement("canvas"), { width: img.width, height: img.height, tabIndex: 0 }), img)));
     }
-    function renderTilemap() {
-        const ctx = Object.assign(document.getElementById('tilemap'),
-            {width: project.stride*project.tilesize, height: (tilemap.length/project.stride)*project.tilesize}).getContext('2d');
-        tilemap.map((t,idx) => ctx.putImageData(t, idx%project.stride * project.tilesize, ((idx/project.stride) | 0) * project.tilesize));
+    function renderTilemap(layerIdx = 0) {
+        const ctx = Object.assign(document.getElementById(`layer${layerIdx}`),
+            { width: project.stride * project.tilesize, height: (tilemap.length / project.stride) * project.tilesize }).getContext('2d');
+        tilemap.map((t, idx) => ctx.putImageData(t, idx % project.stride * project.tilesize, ((idx / project.stride) | 0) * project.tilesize));
     }
     async function renderRules() {
-        while(document.styleSheets[0].rules.length)document.styleSheets[0].removeRule(0);
-        document.styleSheets[0].insertRule(`aside>#tiles>canvas:nth-child(${project.walkable||0}){border-right: 4px dotted red;}`);
+        while (document.styleSheets[0].rules.length) document.styleSheets[0].removeRule(0);
+        for (let type in project.tileIndexes) {
+            document.styleSheets[0].insertRule(`aside>#tiles>canvas:nth-child(${project.tileIndexes[type] || 0}){border-right: 4px dotted red;}`);
+        }
     }
-    function replaceTile(listIdx, to) {
+    function replaceTile(/**@type{number[]}*/listIdx, /**@type{ImageData}*/to) {
         tilemap = tilemap.map(i => listIdx.includes(tileset.indexOf(i)) ? to : i);
         tileset = tileset.filter(i => !listIdx.includes(tileset.indexOf(i)));//.filter(t,idx => idx != listIdx);
-    }
-    action.walkable.oninput = function() {project.walkable=this.value; renderRules();}
-    action.trim.onclick = function() {
-        const limit = +prompt(`trim title with occurences lower or equal to ... `, 1);
-        const stats = tilemap.map(e => tileset.indexOf(e)).reduce((acc, e) => acc.set(e, (acc.get(e) || 0) + 1), new Map());
-        const [popularIdx] = [...stats].sort(([_a,a],[_b,b]) => b-a)[0];
-        [...stats].filter(([idx,count]) => count <= limit);
-        const toTrim = [...stats].filter(([idx,count]) => count <= limit).map(([idx])=>idx);
-        if(!confirm(`${toTrim.length} tiles will be trimed to #${popularIdx}`)) return;
-        replaceTile(toTrim, tileset[popularIdx]);
         renderTileset();
         renderTilemap();
         renderRules();
     }
+    function moveTile(/**@type{number}*/from, /**@type{number}*/to) {
+        const i = tileset[from];
+        tileset.splice(from, 1);//remove item
+        tileset.splice(to, 0, i);//add back
+        renderTileset();
+        renderRules();
+    }
+    action.trim.onclick = function () {
+        const limit = +prompt(`trim title with occurences lower or equal to ... `, 1);
+        const stats = tilemap.map(e => tileset.indexOf(e)).reduce((acc, e) => acc.set(e, (acc.get(e) || 0) + 1), new Map());
+        const [popularIdx] = [...stats].sort(([_a, a], [_b, b]) => b - a)[0];
+        [...stats].filter(([idx, count]) => count <= limit);
+        const toTrim = [...stats].filter(([idx, count]) => count <= limit).map(([idx]) => idx);
+        if (!confirm(`${toTrim.length} tiles will be trimed to #${popularIdx}`)) return;
+        replaceTile(toTrim, tileset[popularIdx]);
+    }
+    for (let type in project.tileIndexes) {
+        action[type].oninput = function () { project.tileIndexes[type] = this.value; renderRules(); }
+    }
+
+    if (localStorage.tileset) fromLocalStorage();
+
+    document.onkeydown = function (evt) {
+        const cnv = document.querySelector('canvas:focus');
+        if (cnv) {
+            const siblin = [...cnv.parentNode.children];
+            const idx = siblin.indexOf(cnv);
+            if (evt.ctrlKey && evt.keyCode == 37) moveTile(idx, Math.max(idx - 1, 0));//l
+            if (evt.ctrlKey && evt.keyCode == 38) moveTile(idx, Math.max(idx - 6, 0));//u
+            if (evt.ctrlKey && evt.keyCode == 39) moveTile(idx, Math.min(idx + 1, siblin.length));//r
+            if (evt.ctrlKey && evt.keyCode == 40) moveTile(idx, Math.min(idx + 6, siblin.length));//d
+            if (evt.keyCode == 46 && idx) replaceTile([idx], tileset[0]);//d
+            console.log(evt.keyCode)
+        }
+    };
 </script>
 <style></style>
 <style>
-    canvas:focus {outline: auto;}
-    a.needHref:not([href]){display: none;}
-    body>canvas{margin-left:200px;border:2px solid black}
-    aside{position: fixed;top:0;left:0;bottom:0;max-width:200px;overflow: auto;background-color: rgba(0,0,0,.5);}
-    aside>form{display: flex;justify-content: space-between;}
-    aside>form>input{width: 100%;}
-    aside>#tiles{display: flex;flex-wrap: wrap;}
-    aside>#tiles>canvas{width: 32px;image-rendering: pixelated;}
+    a.needHref:not([href]) {
+        display: none;
+    }
+
+    main {
+        display: grid;
+        justify-items: stretch;
+    }
+
+    main>canvas {
+        grid-area: 1 / 1 / 2 / 2;
+        margin-left: 200px;
+        border: 2px solid black
+    }
+
+    aside {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        max-width: 207px;
+        overflow: auto;
+        background-color: rgba(0, 0, 0, .5);
+    }
+
+    aside>form {
+        display: flex;
+        justify-content: space-between;
+    }
+
+    aside>form>input {
+        width: 100%;
+    }
+
+    aside>#tiles {
+        display: flex;
+        flex-wrap: wrap;
+    }
+
+    aside>#tiles>canvas {
+        width: 32px;
+        image-rendering: pixelated;
+    }
+
+    aside>#tiles>canvas:focus {
+        outline: auto;
+    }
 </style>
