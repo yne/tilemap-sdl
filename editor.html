@@ -24,17 +24,11 @@
         <output name="tilemap"><a download="tilemap.bin" class="needHref">tilemap</a></output>
         <output name="project"><a download="project.json" class="needHref">project</a></output>
     </form>
-    <form name="action" onsubmit="return false">
+    <form name="action">
         <button name="trim" type="button">trim...</button>
-        <input name=walkable title=walkable type="number" min="0" size="2">
-        <input name=colision title=colision type="number" min="0" size="2">
-        <input name=swimming title=swimming type="number" min="0" size="2">
-        <input name=slippery title=slippery type="number" min="0" size="2">
-        <input name=bridge_h title=bridge_h type="number" min="0" size="2">
-        <input name=bridge_v title=bridge_v type="number" min="0" size="2">
-        <input name=stair_ru title=stair_ru type="number" min="0" size="2">
-        <input name=stair_rd title=stair_rd type="number" min="0" size="2">
+        <input name="walkable" value="0" hidden>
     </form>
+    <form name=""></form>
     <div id="tiles"></div>
 </aside>
 <main>
@@ -52,6 +46,13 @@
             /**@type{number}*/ walkable: 0, // shall always be 0
             /**@type{number}*/ colision: 0,
             /**@type{number}*/ swimming: 0,
+            /**@type{number}*/ paddling: 0, // ex: climbing stare
+            /**@type{number}*/ sloshing: 0,
+            /**@type{number}*/ solid_ne: 0,
+            /**@type{number}*/ solid_se: 0,
+            /**@type{number}*/ solid_nw: 0,
+            /**@type{number}*/ solid_sw: 0,
+            /**@type{number}*/ teleport: 0,
             /**@type{number}*/ slippery: 0,
             /**@type{number}*/ bridge_h: 0,
             /**@type{number}*/ bridge_v: 0,
@@ -59,11 +60,17 @@
             /**@type{number}*/ stair_rd: 0, // Right is Downstair
         }
     };
+    let /**@type{Object[]} list of commands for cmdLayer */ cmdList = [
+        { overlay: 0 },
+        { sprite: 0 },
+    ];
     const { load, proj, save, action } = document.forms;
     load.onsubmit = ({ target }) => !fromImageFile(target.image.files[0], +target.size.value);
     proj.onsubmit = ({ target }) => !fromProject(...['.json', '.bin', '.png'].map(ext => target.image.files.find(e => e.name.endsWith(ext))));
     save.onsubmit = ({ target }) => !toHref(...['tileset', 'tilemap', 'project'].map(n => save[n].children[0]));
+    action.onsubmit = ({ target }) => !toLocalStorage()
     const read = (f, type = 'Text') => new Promise((resolve) => Object.assign(new FileReader(), { onload: (ev) => resolve(ev.target.result) })['readAs' + type](f))
+    const el = (tag, props={}, ch=[]) => ch.reduce((e,c) => (e.appendChild(c),e),Object.assign(document.createElement(tag),props))
     async function toLocalStorage() {
         localStorage.tileset = JSON.stringify(tileset.map(t => [t.width, ...t.data]));
         localStorage.tilemapIdx = JSON.stringify(tilemap.map(e => tileset.indexOf(e)));
@@ -76,6 +83,7 @@
         renderTileset();
         renderTilemap();
         renderRules();
+        console.log(project.tileIndexes)
     }
     async function fromImageFile(f, tilesize) {
         const src = await read(f, 'DataURL');
@@ -133,11 +141,13 @@
     function renderTileset() {
         const tileElem = document.getElementById("tiles");
         const draw = (cnv, img) => (cnv.getContext('2d').putImageData(img, 0, 0), cnv);
-        tileElem.replaceChildren(...tileset.map(img => draw(Object.assign(document.createElement("canvas"), { width: img.width, height: img.height, tabIndex: 0 }), img)));
+        tileElem.replaceChildren(...tileset.map(img => draw(Object.assign(document.createElement("canvas"), { width: img.width, height: img.height, tabIndex: 0, title: tilemap.filter(tile=>tile===img).length}), img)));
+        tileElem.setAttribute('data-before',`total:${tileElem.children.length}`);
     }
-    function renderTilemap(layerIdx = 0) {
-        const ctx = Object.assign(document.getElementById(`layer${layerIdx}`),
-            { width: project.stride * project.tilesize, height: (tilemap.length / project.stride) * project.tilesize }).getContext('2d');
+    function renderTilemap() {
+        const layers = document.querySelectorAll(`main>canvas`);
+        const size = { width: project.stride * project.tilesize, height: (tilemap.length / project.stride) * project.tilesize };
+        const ctx = Object.assign(layers[0],size).getContext('2d');
         tilemap.map((t, idx) => ctx.putImageData(t, idx % project.stride * project.tilesize, ((idx / project.stride) | 0) * project.tilesize));
     }
     async function renderRules() {
@@ -157,7 +167,7 @@
         const i = tileset[from];
         tileset.splice(from, 1);//remove item
         tileset.splice(to, 0, i);//add back
-        renderTileset();
+        renderTileset();//TODO move in DOM without re-render
         renderRules();
     }
     action.trim.onclick = function () {
@@ -169,17 +179,19 @@
         if (!confirm(`${toTrim.length} tiles will be trimed to #${popularIdx}`)) return;
         replaceTile(toTrim, tileset[popularIdx]);
     }
-    for (let type in project.tileIndexes) {
-        action[type].oninput = function () { project.tileIndexes[type] = this.value; renderRules(); }
+    for (let name in project.tileIndexes) {
+        if (!action[name]) action.appendChild(el('input',{name, type:"number",size:2,title:name}))
+        action[name].oninput = function () { project.tileIndexes[name] = this.value; renderRules(); }
     }
 
     if (localStorage.tileset) fromLocalStorage();
 
     document.onkeydown = function (evt) {
-        const cnv = document.querySelector('canvas:focus');
+        const cnv = document.querySelector('#tiles>canvas:focus');
         if (cnv) {
             const siblin = [...cnv.parentNode.children];
             const idx = siblin.indexOf(cnv);
+            if (evt.ctrlKey && evt.keyCode == 33) moveTile(idx, 0);
             if (evt.ctrlKey && evt.keyCode == 37) moveTile(idx, Math.max(idx - 1, 0));//l
             if (evt.ctrlKey && evt.keyCode == 38) moveTile(idx, Math.max(idx - 6, 0));//u
             if (evt.ctrlKey && evt.keyCode == 39) moveTile(idx, Math.min(idx + 1, siblin.length));//r
@@ -191,13 +203,20 @@
 </script>
 <style></style>
 <style>
+    [data-after]::after {
+        content: attr(data-after);
+        width:100%;
+    }
+    [data-before]::before {
+        content: attr(data-before);
+        width:100%;
+    }
     a.needHref:not([href]) {
         display: none;
     }
 
     main {
         display: grid;
-        justify-items: stretch;
     }
 
     main>canvas {
@@ -219,6 +238,7 @@
     aside>form {
         display: flex;
         justify-content: space-between;
+        flex-wrap: wrap;
     }
 
     aside>form>input {

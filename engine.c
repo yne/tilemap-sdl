@@ -11,11 +11,6 @@
 #define MIN(A, B) (A < B ? A : B)
 #define u8str(u) hex(u >> 4), hex(u)
 #define u16str(u) u8str(u >> 8), u8str(u)
-char hex(uint8_t u)
-{
-    u &= 0xf;
-    return (u >= 0 && u <= 9) ? '0' + u : 'A' + u - 10;
-}
 
 struct {
     SDL_Renderer* render;
@@ -26,33 +21,89 @@ struct {
     SDL_Texture* font;
 } view;
 struct {
-    uint8_t* map;
-    uint32_t cols, rows, total, walkable;
+    uint8_t* map[2];
+    uint32_t cols, rows, total;
+    uint8_t walkable, colision, swimming, paddling, sloshing, solid_ne, solid_se, solid_nw, solid_sw, teleport, slippery, bridge_h, bridge_v, stair_ru, stair_rd;
 } tilemap;
 struct {
-    SDL_Texture* texture;
+    SDL_Texture* texture[2];
     int size;
 } tileset;
 struct {
-    SDL_Texture* texture;
+    SDL_Texture* texture[2];
     uint32_t col, row, width, height;
     uint32_t x, y;
-    uint8_t* map_cache;
-} layers[1];
+//    uint8_t* map_cache;
+} layers;
 struct {
     SDL_Texture* texture;
     uint32_t size, dir, step, speed;
     int32_t x, y; // player position on the worldmap
-    _Bool debug, dead, god;
+    int32_t velocity_x, velocity_y; // when moving on ice/water
+    _Bool debug, dead, god, on_bridge_from_side;
 } player;
 
-uint8_t mapAt(int32_t dx, int32_t dy)
+uint8_t old_tile_idx = 0;//TODO move into player ?
+uint8_t old_tile_x = 0;
+uint8_t old_tile_y = 0;
+
+char hex(uint8_t u)
 {
-    int32_t x = (dx + (player.x + (player.size / 2))) / tileset.size;
-    int32_t y = (dy + (player.y + player.size - 4)) / tileset.size;
-    if (x < 0 || x >= tilemap.cols || y < 0 || y >= tilemap.rows)
-        return 0;
-    return tilemap.map[x + (tilemap.cols * y)];
+    u &= 0xf;
+    return (u >= 0 && u <= 9) ? '0' + u : 'A' + u - 10;
+}
+
+void movePlayer(int32_t dx, int32_t dy)
+{
+    if (player.x + dx > tilemap.cols * tileset.size)
+        dx = 0;
+    if (player.y + dy > tilemap.rows * tileset.size)
+        dy = 0;
+    int32_t tile_x = (dx + player.x) / tileset.size; // (player.x + (player.size / 2))
+    int32_t tile_y = (dy + player.y) / tileset.size; // (player.y + player.size - 4)
+    uint8_t tile_idx = tilemap.map[0][tile_x + (tile_y * tilemap.cols)];
+    if (player.god || tile_idx >= tilemap.walkable) {
+        player.x += dx;
+        player.y += dy;
+    } else if (tile_idx >= tilemap.colision) {
+    } else if (tile_idx >= tilemap.swimming) {
+        player.x += dx / 2;
+        player.y += dy / 2;
+    } else if (tile_idx >= tilemap.solid_ne) {
+        player.x -= MAX(MAX(dy, 0), MAX(dy, 0)); // x-- if player goes up
+        player.y += dy;// y-- if player goes right
+    } else if (tile_idx >= tilemap.solid_se) { // x-- if player goes in the solid
+    } else if (tile_idx >= tilemap.solid_nw) {
+    } else if (tile_idx >= tilemap.solid_sw) {
+    } else if (tile_idx >= tilemap.teleport) {
+        printf("teleport[%i:%i]", tile_x, tile_y);
+    } else if (tile_idx < tilemap.slippery) {
+        player.x += player.velocity_x = MAX(player.velocity_x, dx);
+        player.y += player.velocity_y = MAX(player.velocity_y, dy);
+    } else if (tile_idx >= tilemap.bridge_h) {
+        if (old_tile_idx >= tilemap.bridge_h) { // still on the bridge
+            player.x += dx;
+            player.y += dy;
+        } else { // we entered the bridge
+            int on_bridge_from_side = old_tile_x == tile_x;
+        }
+    } else if (tile_idx >= tilemap.bridge_v) {
+        if (old_tile_idx >= tilemap.bridge_h) { // still on the bridge
+            player.x += dx;
+            player.y += dy;
+        } else { // we entered the bridge
+            int on_bridge_from_side = old_tile_x == tile_x;
+        }
+    } else if (tile_idx < tilemap.stair_ru) {
+        player.x += (dx + dy);
+        player.y += (dx + dy);
+    } else if (tile_idx >= tilemap.stair_rd) {
+        player.x += (-dx + -dy);
+        player.y += (-dx + -dy);
+    }
+    old_tile_idx = tile_idx;
+    old_tile_x = tile_x;
+    old_tile_y = tile_y;
 }
 // no SDL_LoadFile* on SDL<2.0.6
 void* loadFile(char* path, size_t* size)
@@ -89,11 +140,10 @@ _Bool HandleEvent()
         player.debug ^= sc == SDL_SCANCODE_D; // enable debug view on "D" press
         player.dead |= sc == SDL_SCANCODE_ESCAPE; // quit on ESC
         player.dir = sc & 0x3; // SDL2 dependant, but simple enought
-        player.speed = event.key.keysym.mod & KMOD_SHIFT ? 16 : 1;
+        player.speed = event.key.keysym.mod & KMOD_SHIFT ? 16 : 2;
         int32_t move_x = player.speed * (sc == SDL_SCANCODE_LEFT ? -1 : sc == SDL_SCANCODE_RIGHT);
         int32_t move_y = player.speed * (sc == SDL_SCANCODE_UP ? -1 : sc == SDL_SCANCODE_DOWN);
-        player.x += (player.god || mapAt(move_x, 0) < tilemap.walkable) ? move_x : 0;
-        player.y += (player.god || mapAt(0, move_y) < tilemap.walkable) ? move_y : 0;
+        movePlayer(move_x, move_y);
         moved |= (SDL_SCANCODE_RIGHT <= sc) && (sc <= SDL_SCANCODE_UP);
         if (sc == SDL_SCANCODE_G)
             player.god = !player.god;
@@ -115,31 +165,54 @@ void init(char* ini)
     view.width = atoi(getVal(conf, conf_len, "WINDOWW=") ?: "320");
     view.height = atoi(getVal(conf, conf_len, "WINDOWH=") ?: "240");
     view.shift = 5;
-    view.window = SDL_CreateWindow("tilemap demo", 2000, 0, view.width, view.height, 0);
+    view.window = SDL_CreateWindow("tilemap demo", 0, 0, view.width, view.height, 0);
     view.render = SDL_CreateRenderer(view.window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     view.font = SDL_CreateTextureFromSurface(view.render, SDL_LoadBMP(getVal(conf, conf_len, "DBGFONT=") ?: "font.bmp")); // convert -depth 8 -size 16x544 rgba:zelda.rgba rgba.png
 
     player.texture = SDL_CreateTextureFromSurface(view.render, SDL_LoadBMP(getVal(conf, conf_len, "SPRITES=") ?: "sprites.bmp"));
     SDL_QueryTexture(player.texture, NULL, NULL, &player.size, NULL);
-    tileset.texture = SDL_CreateTextureFromSurface(view.render, SDL_LoadBMP(getVal(conf, conf_len, "TILESET="))); // convert -depth 8 -size 16x544 rgba:zelda.rgba rgba.png
-    SDL_QueryTexture(tileset.texture, NULL, NULL, &tileset.size, NULL); // use BMP width as sprite size reference
-    layers[0].width = view.width; // TODO:scale layer to view width + 1 sprite for wrapping
-    layers[0].height = view.height;
-    layers[0].texture = SDL_CreateTexture(view.render, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, layers[0].width, layers[0].height);
-    // layers[0].map_cache = malloc((layers[0].width / tileset.size) * (layers[0].height / tileset.size) * sizeof(*tilemap.map));
+    tileset.texture[0] = SDL_CreateTextureFromSurface(view.render, SDL_LoadBMP(getVal(conf, conf_len, "TILESET=")?:getVal(conf, conf_len, "TILESET0="))); // convert -depth 8 -size 16x544 rgba:zelda.rgba rgba.png
+    SDL_QueryTexture(tileset.texture[0], NULL, NULL, &tileset.size, NULL); // use BMP width as sprite size reference
+    layers.width = view.width; // TODO:scale layer to view width + 1 sprite for wrapping
+    layers.height = view.height;
+    layers.texture[0] = SDL_CreateTexture(view.render, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, layers.width, layers.height);
+    // layers.map_cache = malloc((layers.width / tileset.size) * (layers.height / tileset.size) * sizeof(*tilemap.map));
     size_t tilemap_size;
-    tilemap.map = loadFile(getVal(conf, conf_len, "TILEMAP="), &tilemap_size);
+    tilemap.map[0] = loadFile(getVal(conf, conf_len, "TILEMAP=")?:getVal(conf, conf_len, "TILEMAP0="), &tilemap_size);
     tilemap.cols = atoi(getVal(conf, conf_len, "MAPCOLS="));
     tilemap.rows = tilemap_size / tilemap.cols;
     tilemap.total = tilemap.rows * tilemap.cols;
-    tilemap.walkable = atoi(getVal(conf, conf_len, "WALKIDX="));
-    player.x = atoi(getVal(conf, conf_len, "SPAWN_X="));
-    player.y = atoi(getVal(conf, conf_len, "SPAWN_Y="));
+    char* overlay = getVal(conf, conf_len, "TILEMAP1=");
+    if (overlay) {
+        tilemap.map[1] = loadFile(overlay, &tilemap_size);
+        layers.texture[1] = SDL_CreateTexture(view.render, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, layers.width, layers.height);
+        tileset.texture[1] = SDL_CreateTextureFromSurface(view.render, SDL_LoadBMP(getVal(conf, conf_len, "TILESET1=")));
+        SDL_SetTextureBlendMode(layers.texture[1], SDL_BLENDMODE_BLEND);
+    }
+    tilemap.walkable = atoi(getVal(conf, conf_len, "WALKABLE=")?:"0");
+    tilemap.colision = atoi(getVal(conf, conf_len, "COLISION=")?:"0");
+    tilemap.swimming = atoi(getVal(conf, conf_len, "SWIMMING=")?:"0");
+    tilemap.paddling = atoi(getVal(conf, conf_len, "PADDLING=")?:"0");
+    tilemap.sloshing = atoi(getVal(conf, conf_len, "SLOSHING=")?:"0");
+    tilemap.solid_ne = atoi(getVal(conf, conf_len, "SOLID_NE=")?:"0");
+    tilemap.solid_se = atoi(getVal(conf, conf_len, "SOLID_SE=")?:"0");
+    tilemap.solid_nw = atoi(getVal(conf, conf_len, "SOLID_NW=")?:"0");
+    tilemap.solid_sw = atoi(getVal(conf, conf_len, "SOLID_SW=")?:"0");
+    tilemap.teleport = atoi(getVal(conf, conf_len, "TELEPORT=")?:"0");
+    tilemap.slippery = atoi(getVal(conf, conf_len, "SLIPPERY=")?:"0");
+    tilemap.bridge_h = atoi(getVal(conf, conf_len, "BRIDGE_H=")?:"0");
+    tilemap.bridge_v = atoi(getVal(conf, conf_len, "BRIDGE_V=")?:"0");
+    tilemap.stair_ru = atoi(getVal(conf, conf_len, "STAIR_RU=")?:"0");
+    tilemap.stair_rd = atoi(getVal(conf, conf_len, "STAIR_RD=")?:"0");
+    player.x = atoi(getVal(conf, conf_len, "SPAWN_X=")?:"0");
+    player.y = atoi(getVal(conf, conf_len, "SPAWN_Y=")?:"0");
 }
 
 void fini()
 {
-    SDL_DestroyTexture(layers[0].texture);
+    for(int i = 0; i < sizeof(layers.texture) / sizeof(*layers.texture); i++)
+        SDL_DestroyTexture(layers.texture[i]);
+    SDL_DestroyTexture(layers.texture[1]);
     SDL_DestroyTexture(player.texture);
     SDL_DestroyRenderer(view.render);
     SDL_DestroyWindow(view.window);
@@ -156,8 +229,9 @@ void player_draw()
         &(SDL_Rect) { player.x - view.x, player.y - view.y, player.size, player.size });
 }
 
-void layer_render()
+void layer_render(uint8_t level)
 {
+    //if(!layers.texture[level])return;
     SDL_Point v = {
         // viewport-relativ point (@)
         view.width - (view.x % view.width),
@@ -178,7 +252,7 @@ void layer_render()
         { v.x, v.y, view.width - v.x, view.height - v.y },
     };
     for (uint32_t i = 0; i < sizeof(coord) / sizeof(*coord); i += 2) {
-        SDL_RenderCopy(view.render, layers[0].texture, &coord[i], &coord[i + 1]);
+        SDL_RenderCopy(view.render, layers.texture[level], &coord[i], &coord[i + 1]);
     }
 }
 uint32_t printXY(uint32_t x, uint32_t y, char* str)
@@ -192,31 +266,34 @@ uint32_t printXY(uint32_t x, uint32_t y, char* str)
     return x;
 }
 
-// TODO use layers[0].map_cache to avoid useless RenderCopy
+// TODO use layers.map_cache to avoid useless RenderCopy
 uint32_t last_view_x = ~0, last_view_y = ~0;
 int last;
-void map_to_layer(uint32_t view_x, uint32_t view_y)
+void map_to_layers(uint32_t view_x, uint32_t view_y)
 {
     // no update if we are on the same tile
     if (view_x / tileset.size == last_view_x / tileset.size
         && view_y / tileset.size == last_view_y / tileset.size)
         return;
-    SDL_SetRenderTarget(view.render, layers[0].texture);
-
-    for (uint32_t map_row = view_y / tileset.size, map_end = (view_y + view.height) / tileset.size; map_row < map_end; map_row++) {
-        for (uint32_t map_col = view_x / tileset.size, map_end = (view_x + view.width) / tileset.size; map_col < map_end; map_col++) {
-            uint32_t tile = map_col + (map_row * tilemap.cols);
-            uint32_t layer_col = map_col % (layers[0].width / tileset.size);
-            uint32_t layer_row = map_row % (layers[0].height / tileset.size);
-            SDL_RenderCopy(view.render, tileset.texture,
-                &(SDL_Rect) { 0, tilemap.map[tile % tilemap.total] * tileset.size, tileset.size, tileset.size },
-                &(SDL_Rect) { layer_col * tileset.size, layer_row * tileset.size, tileset.size, tileset.size });
-            if (player.debug)
-                printXY(layer_col * 16, layer_row * 16, (char[]) { u8str(tilemap.map[tile % tilemap.total]), 0 });
+    // no such layer to draw
+    for (uint8_t level = 0; level < sizeof(layers.texture) / sizeof(*layers.texture); level++) {
+        if(!tilemap.map[level] || !layers.texture[level] || !tileset.texture[level])
+            return;
+        SDL_SetRenderTarget(view.render, layers.texture[level]);
+        for (uint32_t map_row = view_y / tileset.size, map_end = (view_y + view.height) / tileset.size; map_row < map_end; map_row++) {
+            for (uint32_t map_col = view_x / tileset.size, map_end = (view_x + view.width) / tileset.size; map_col < map_end; map_col++) {
+                uint32_t tile = map_col + (map_row * tilemap.cols);
+                uint32_t layer_col = map_col % (layers.width / tileset.size);
+                uint32_t layer_row = map_row % (layers.height / tileset.size);
+                SDL_RenderCopy(view.render, tileset.texture[level],
+                    &(SDL_Rect) { 0, tilemap.map[level][tile % tilemap.total] * tileset.size, tileset.size, tileset.size },
+                    &(SDL_Rect) { layer_col * tileset.size, layer_row * tileset.size, tileset.size, tileset.size });
+                if (player.debug)
+                    printXY(layer_col * 16, layer_row * 16, (char[]) { u8str(tilemap.map[level][tile % tilemap.total]), 0 });
+            }
         }
     }
     last = view_x / tileset.size + view_y / tileset.size;
-    SDL_SetRenderTarget(view.render, NULL);
     last_view_x = view_x;
     last_view_y = view_y;
 }
@@ -239,9 +316,14 @@ int main(int argc, char** argv)
     while (!player.dead) { // mainloop (shall SDL_Delay(1000/60) ? )
         _Bool moved = HandleEvent(); // update player.x,y
         camera_follow();
-        map_to_layer(view.x, view.y);
-        layer_render();
+
+        map_to_layers(view.x, view.y);
+
+        SDL_SetRenderTarget(view.render, NULL);
+        layer_render(0);
         player_draw();
+        layer_render(1);
+
         printXY(6, 8, (char[]) { 'C', 'A', 'M', ':', u16str(view.x), ' ', u16str(view.y), 0 });
         printXY(6, 24, (char[]) { 'U', 'S', 'R', ':', u16str(player.x), ' ', u16str(player.y), 0 });
         printXY(6, 32, (char[]) { 'G', 'O', 'D', ':', player.god ? 'Y' : 'N', 0 });
