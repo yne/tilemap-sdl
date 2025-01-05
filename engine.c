@@ -62,6 +62,8 @@ void movePlayer(int32_t dx, int32_t dy)
     if (player.y + dy > tilemap.rows * tileset.size)
         dy = 0;
     uint8_t tile_idx = getTileAt(player.x + dx, player.y + dy);
+    int32_t tile_x = (player.x + dx) % tileset.size;
+    int32_t tile_y = (player.y + dy) % tileset.size;
     if (player.god || tile_idx <= tilemap.walkable) {
         player.x += dx;
         player.y += dy;
@@ -77,32 +79,36 @@ void movePlayer(int32_t dx, int32_t dy)
         player.y += dy / 2;
         //SE SW NE NW
     } else if (tile_idx <= tilemap.solid_se) {
-        int32_t tile_x = (player.x + dx) % tileset.size;
-        int32_t tile_y = (player.y + dy) % tileset.size;
-        if (tile_x < (tileset.size - tile_y)) { //not in the N-E corner: can move
+        if (tile_x <= (tileset.size - tile_y)) { //not in the N-E corner: can move
             player.x += dx;
             player.y += dy;
+        } else { // over the corner
+            player.x += -dy;
+            player.y += -dx;
         }
     } else if (tile_idx <= tilemap.solid_sw) {
-        int32_t tile_x = (player.x + dx) % tileset.size;
-        int32_t tile_y = (player.y + dy) % tileset.size;
-        if (tile_x > tile_y) { // not in the N-W corner: can move
+        if (tile_x >= tile_y) { // not in the N-W corner: can move
             player.x += dx;
             player.y += dy;
+        } else { // over the corner
+            player.x += dy;
+            player.y += dx;
         }
     } else if (tile_idx <= tilemap.solid_ne) {
-        int32_t tile_x = (player.x + dx) % tileset.size;
-        int32_t tile_y = (player.y + dy) % tileset.size;
-        if (tile_x < tile_y) { // not in the N-W corner: can move
+        if (tile_x <= tile_y) { // not in the N-W corner: can move
             player.x += dx;
             player.y += dy;
+        } else { // over the corner
+            player.x += dy;
+            player.y += dx;
         }
     } else if (tile_idx <= tilemap.solid_nw) {
-        int32_t tile_x = (player.x + dx) % tileset.size;
-        int32_t tile_y = (player.y + dy) % tileset.size;
-        if (tile_x > (tileset.size - tile_y)) { //not in the N-E corner: can move
+        if (tile_x >= (tileset.size - tile_y)) { //not in the N-E corner: can move
             player.x += dx;
             player.y += dy;
+        } else { // over the corner
+            player.x += -dy;
+            player.y += -dx;
         }
     } else if (tile_idx <= tilemap.slippery) {
         int32_t h = (player.x - player.old_x)?:dx;
